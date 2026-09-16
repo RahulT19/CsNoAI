@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Methodology: how the forecast is computed · CsNoAI{% endblock %}
+
+{% block description %}The full derivation behind CsNoAI: how ten sessions are scraped from an HTML table, how the least-squares slope and intercept are solved, and the exact threshold rules that produce a buy, sell or hold signal.{% endblock %}
+
+{% block breadcrumbs %}
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="{{ url_for('index') }}">CsNoAI</a></li>
+        <li><span aria-current="page">Methodology</span></li>
+      </ol>
+    </nav>
+{% endblock %}
+
+{% block content %}
+    <article class="prose">
+      <h1>Methodology</h1>
+      <p class="lede">
+        Every number on the <a href="{{ url_for('index') }}">dashboard</a> is produced by the four
+        steps below. There is no trained model and no hidden state: given the same ten rows, the
+        arithmetic here reproduces the forecast exactly, by hand if you like.
+      </p>
+
+      <h2>1. Extraction</h2>
+      <p>
+        A single static quote page is requested per symbol with <code>requests</code>, behind a
+        desktop <code>User-Agent</code>. <code>BeautifulSoup(html, "html.parser")</code> builds the
+        DOM; the price table is identified by its header labels, and the ten most recent sessions
+        are read out of the <code>&lt;tr&gt;</code> and <code>&lt;td&gt;</code> nodes. Corporate
+        action rows — dividends and splits — carry no OHLC data and are skipped.
+      </p>
+      <p>
+        No JSON endpoint, no CSV download and no API wrapper is used, and the scraper never follows
+        a link. If the live page is blocked or renders its table client-side, an offline HTML
+        snapshot is parsed by the same function, so the extraction path is identical either way.
+      </p>
+
+      <h2>2. Structuring</h2>
+      <p>
+        <code>pandas</code> coerces the scraped strings to numerics, drops sessions missing a high,
+        low or close, de-duplicates repeated dates, repairs any row whose high prints below its low,
+        sorts chronologically, clips to the trailing ten sessions, and attaches the ordinal index
+        <code>t = 1…n</code> that the regression is fitted against.
+      </p>
+
+      <h2>3. Ordinary least squares</h2>
+      <p>
+        For each target series <em>y</em> — the daily high and the daily low, fitted independently —
+        we minimise the residual sum of squares <code>Σ(yᵢ − ŷᵢ)²</code> for the line
+        <code>ŷ = m·x + c</code>. Setting both partial derivatives to zero gives the normal
+        equations, whose solution is:
+      </p>
+      <pre><code>      n·Σ(xy) − Σx·Σy
+m =  ──────────────────          c = ȳ − m·x̄
+      n·Σ(x²) − (Σx)²</code></pre>
+      <p>
+        The implementation uses the equivalent matrix form on the design matrix
+        <code>X = [1  x]</code>, solving <code>β = (XᵀX)⁻¹Xᵀy</code> with
+        <code>np.linalg.solve</code> rather than forming an explicit inverse. The test suite pins
+        the result against both <code>numpy.polyfit</code> and the summation identity above to
+        within 1e-9.
+      </p>
+
+      <h3>Goodness of fit</h3>
+      <pre><code>R² = 1 − SS_res / SS_tot = 1 − Σ(yᵢ − ŷᵢ)² / Σ(yᵢ − ȳ)²
+
+σ̂ = √( SS_res / (n − 2) )      SE(m) = σ̂ / √Σ(xᵢ − x̄)²      t = m / SE(m)</code></pre>
+      <p>
+        With <code>n = 10</code> there are 8 degrees of freedom, so <code>|t| &gt; 2.306</code> is
+        significant at the 5% level. A perfectly flat series has no variance to explain; the engine
+        reports <code>R² = 0</code> there rather than dividing by zero.
+      </p>
+
+      <h3>The forecast</h3>
+      <p>
+        Both fitted lines are evaluated one step beyond the observed window, at
+        <code>t = 11</code>, giving a projected trading band rather than a single point. Because the
+        two models are independent they can cross on a converging series, so
+        <code>Ĥ ≥ L̂</code> is enforced before the values reach the decision layer.
+      </p>
+
+      <h2>4. The decision rules</h2>
+      <pre><code>Potential upside = (Ĥ₁₁ − Closeₜ) / Closeₜ
+Downside risk    = (Closeₜ − L̂₁₁) / Closeₜ</code></pre>
+      <p>Evaluated top to bottom — the first match wins:</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <caption>The decision table, generated from the thresholds the engine actually runs on.</caption>
+          <thead>
+            <tr><th scope="col">#</th><th scope="col">Condition</th><th scope="col">Verdict</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Downside ≥ {{ '%.1f'|format(thresholds.downside) }}% <em>or</em> slope(High) &lt; 0</td>
+              <td><span class="tag SELL">SELL</span></td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Upside ≥ {{ '%.1f'|format(thresholds.upside) }}% <em>and</em> R²(High) &gt; {{ '%.2f'|format(thresholds.r2) }} <em>and</em> slope(High) &gt; 0</td>
+              <td><span class="tag BUY">BUY</span></td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>anything else</td>
+              <td><span class="tag HOLD">HOLD</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Rule 1 is an <strong>override, not an alternative</strong>. A widening high–low spread can
+        project a large upside and a large drawdown at the same time; testing the sell condition
+        first means the engine structurally cannot recommend buying into that regime. Rule 2 carries
+        two clauses beyond the raw upside: the R² floor demands that the trendline explains the
+        recent path rather than fitting noise, and the positive-slope requirement stops the engine
+        buying a falling knife whose projected high merely sits above a depressed close.
+      </p>
+
+      <h2>Where this breaks</h2>
+      <ol>
+        <li>
+          Linear extrapolation over ten sessions captures short-term drift and nothing else — no
+          mean reversion, no volatility clustering, no gaps, no earnings dates. Its error grows
+          without bound as the horizon extends; one session is the honest limit.
+        </li>
+        <li>
+          A high R² is not predictive skill. It says the last ten points sat near a line, not that
+          the eleventh will. That is exactly why the slope sign and the downside boundary act as
+          independent gates.
+        </li>
+        <li>
+          Ten observations is a very small sample. Two degrees of freedom go to the fit, leaving
+          eight — enough for a t-test, not enough for confidence in the tails.
+        </li>
+        <li>
+          The offline corpus is realistically shaped but synthetic. It guarantees the demo runs; it
+          is not a live market record.
+        </li>
+        <li>
+          There are no transaction costs, no slippage, no position sizing and no backtest. The
+          signal is a directional opinion, not a trading system.
+        </li>
+      </ol>
+
+      <p><a href="{{ url_for('index') }}">← Back to the dashboard</a></p>
+    </article>
+{% endblock %}
+
+{% block structured_data %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Methodology: how the CsNoAI forecast is computed",
+    "description": "Derivation of the least-squares forecast and the threshold rules behind the CsNoAI buy, sell and hold signals.",
+    "url": "{{ canonical }}",
+    "inLanguage": "en",
+    "isPartOf": { "@type": "WebSite", "@id": "{{ site_url }}/#website", "name": "CsNoAI", "url": "{{ site_url }}/" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "CsNoAI", "item": "{{ site_url }}/" },
+        { "@type": "ListItem", "position": 2, "name": "Methodology", "item": "{{ canonical }}" }
+      ]
+    }
+  }
+  </script>
+{% endblock %}

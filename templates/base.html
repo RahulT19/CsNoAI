@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b0e14">
+
+    <title>{% block title %}CsNoAI — Gaming & eSports sector forecasting{% endblock %}</title>
+    <meta name="description" content="{% block description %}CsNoAI scrapes ten trading sessions of raw HTML, fits least-squares trendlines to the daily high and low, and projects the next session as a buy, sell or hold signal.{% endblock %}">
+    <meta name="robots" content="{% block robots %}index, follow{% endblock %}">
+    <link rel="canonical" href="{% block canonical %}{{ canonical }}{% endblock %}">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="CsNoAI">
+    <meta property="og:title" content="{% block og_title %}CsNoAI — Gaming & esports sector forecasting{% endblock %}">
+    <meta property="og:description" content="{% block og_description %}Least-squares forecasting for five listed gaming and esports equities, with transparent buy, sell and hold signals.{% endblock %}">
+    <meta property="og:url" content="{% block og_url %}{{ canonical }}{% endblock %}">
+    <meta property="og:image" content="{{ site_url }}{{ url_for('static', filename='img/og-image.png') }}">
+    <meta name="twitter:card" content="summary_large_image">
+
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.svg') }}">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+    {% block structured_data %}{% endblock %}
+</head>
+<body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a class="brand" href="{{ url_for('index') }}">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 17l5-6 4 3 6-8"></path>
+                        <path d="M16 6h5v5"></path>
+                    </svg>
+                </span>
+                <span class="brand-words">
+                    <span class="brand-text">CsNoAI</span>
+                    <span class="brand-sub">Gaming & esports · OLS forecasting</span>
+                </span>
+            </a>
+
+            <nav class="topnav" aria-label="Primary">
+                <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
+                <a href="{{ url_for('methodology') }}" {% if request.endpoint == 'methodology' %}class="active" aria-current="page"{% endif %}>Methodology</a>
+                {% block nav_extra %}{% endblock %}
+            </nav>
+        </div>
+    </header>
+
+    <main id="main" class="container">
+        {% block breadcrumbs %}{% endblock %}
+
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-info" role="status">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <div class="site-footer-inner">
+            <div class="footer-pipeline">
+                <span class="footer-tag">Pipeline</span>
+                <span>requests + BeautifulSoup</span>
+                <span class="sep">→</span>
+                <span>pandas</span>
+                <span class="sep">→</span>
+                <span>NumPy OLS</span>
+                <span class="sep">→</span>
+                <span>Flask</span>
+                <span class="sep">→</span>
+                <span>dashboard</span>
+            </div>
+            <p class="footer-note">
+                Academic coursework. Linear extrapolation over ten sessions is not investment advice.
+            </p>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>
