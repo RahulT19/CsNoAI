@@ -1,3 +1,4 @@
+# scraper.py
 from __future__ import annotations
 
 import datetime as dt
@@ -7,12 +8,6 @@ from typing import Dict, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
-
-import db
-
-# --------------------------------------------------------------------------
-# Configuration
-# --------------------------------------------------------------------------
 
 UNIVERSE: Dict[str, str] = {
     "EA": "Electronic Arts Inc.",
@@ -25,10 +20,7 @@ UNIVERSE: Dict[str, str] = {
 SOURCE_URL = "https://finance.yahoo.com/quote/{ticker}/history/"
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache",
@@ -36,43 +28,28 @@ HEADERS = {
 }
 
 REQUEST_TIMEOUT = 8
-WINDOW = 10
+WINDOW = 10          
 
 _HEADER_ALIASES = {
-    "date": "date",
-    "open": "open",
-    "high": "high",
-    "low": "low",
-    "close": "close",
-    "close*": "close",
-    "adj close": "adj_close",
-    "adj close**": "adj_close",
-    "volume": "volume",
+    "date": "date", "open": "open", "high": "high", "low": "low", 
+    "close": "close", "close*": "close", "adj close": "adj_close", 
+    "adj close**": "adj_close", "volume": "volume",
 }
 
 _DATE_FORMATS = ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%d %b %Y")
 
-
 class ScrapeError(RuntimeError):
-
+    pass
 
 @dataclass
 class ScrapeResult:
-
     ticker: str
     company: str
     rows: List[dict]
-    source: str
+    source: str                 
     url: str
     note: str = ""
-    fetched_at: str = field(
-        default_factory=lambda: dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-
-
-# --------------------------------------------------------------------------
-# Low level helpers
-# --------------------------------------------------------------------------
+    fetched_at: str = field(default_factory=lambda: dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 def _clean_number(text: str) -> Optional[float]:
     if text is None:
@@ -85,7 +62,6 @@ def _clean_number(text: str) -> Optional[float]:
     except ValueError:
         return None
 
-
 def _clean_date(text: str) -> Optional[dt.date]:
     candidate = re.sub(r"\s+", " ", (text or "")).strip()
     for fmt in _DATE_FORMATS:
@@ -95,17 +71,14 @@ def _clean_date(text: str) -> Optional[dt.date]:
             continue
     return None
 
-
 def _cell_text(cell) -> str:
     return re.sub(r"\s+", " ", cell.get_text(" ", strip=True)).strip()
-
 
 def _header_map(table) -> Dict[int, str]:
     head = table.find("thead")
     header_row = head.find("tr") if head else table.find("tr")
     if header_row is None:
         return {}
-
     mapping: Dict[int, str] = {}
     for index, cell in enumerate(header_row.find_all(["th", "td"])):
         label = _cell_text(cell).lower()
@@ -115,19 +88,13 @@ def _header_map(table) -> Dict[int, str]:
                 break
     return mapping
 
-
 def _looks_like_price_table(mapping: Dict[int, str]) -> bool:
     return {"date", "high", "low", "close"}.issubset(set(mapping.values()))
 
-
-# --------------------------------------------------------------------------
-# DOM traversal — the heart of the scraping requirement
-# --------------------------------------------------------------------------
-
 def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
-
     target, mapping = None, {}
+    
     for table in soup.find_all("table"):
         candidate = _header_map(table)
         if _looks_like_price_table(candidate):
@@ -143,12 +110,12 @@ def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
     for tr in body.find_all("tr"):
         cells = tr.find_all("td")
         if len(cells) < 4:
-            continue
+            continue  
 
         raw = [_cell_text(c) for c in cells]
         joined = " ".join(raw).lower()
         if "dividend" in joined or "stock split" in joined:
-            continue
+            continue  
 
         record: dict = {}
         for index, field_name in mapping.items():
@@ -157,24 +124,20 @@ def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
             record[field_name] = raw[index] if field_name == "date" else _clean_number(raw[index])
 
         session = _clean_date(record.get("date", ""))
-        if session is None:
-            continue
-        if any(record.get(k) is None for k in ("high", "low", "close")):
+        if session is None or any(record.get(k) is None for k in ("high", "low", "close")):
             continue
 
-        rows.append(
-            {
-                "date": session.isoformat(),
-                "open": record.get("open"),
-                "high": record["high"],
-                "low": record["low"],
-                "close": record["close"],
-                "volume": record.get("volume"),
-            }
-        )
+        rows.append({
+            "date": session.isoformat(),
+            "open": record.get("open"),
+            "high": record["high"],
+            "low": record["low"],
+            "close": record["close"],
+            "volume": record.get("volume"),
+        })
 
         if len(rows) >= window:
-            break
+            break  
 
     if not rows:
         raise ScrapeError("price table located but no parsable <tr> rows")
@@ -182,13 +145,10 @@ def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
     rows.sort(key=lambda r: r["date"])
     return rows
 
-
 def fetch_html(ticker: str, timeout: int = REQUEST_TIMEOUT) -> str:
-    url = SOURCE_URL.format(ticker=ticker)
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
+    response = requests.get(SOURCE_URL.format(ticker=ticker), headers=HEADERS, timeout=timeout)
     response.raise_for_status()
     return response.text
-
 
 def get_history(ticker: str, window: int = WINDOW, allow_live: bool = True) -> ScrapeResult:
     symbol = ticker.upper().strip()
@@ -197,16 +157,10 @@ def get_history(ticker: str, window: int = WINDOW, allow_live: bool = True) -> S
 
     url = SOURCE_URL.format(ticker=symbol)
 
-    cached_rows = db.get_history(symbol)
-    if cached_rows:
-        return ScrapeResult(symbol, UNIVERSE[symbol], cached_rows[-window:], "cache", url,
-                            note="loaded from MongoDB cache")
-
     if allow_live:
         try:
             rows = parse_history_table(fetch_html(symbol), window)
             if len(rows) >= 3:
-                db.save_history(symbol, UNIVERSE[symbol], rows, "live")
                 return ScrapeResult(symbol, UNIVERSE[symbol], rows, "live", url)
             note = f"live page yielded only {len(rows)} rows"
         except (requests.RequestException, ScrapeError, ValueError) as exc:
@@ -214,15 +168,7 @@ def get_history(ticker: str, window: int = WINDOW, allow_live: bool = True) -> S
     else:
         note = "live fetch disabled by caller"
 
-    rows = parse_history_table(_FALLBACK_PAGES[symbol], window)
-    db.save_history(symbol, UNIVERSE[symbol], rows, "fallback")
-    return ScrapeResult(symbol, UNIVERSE[symbol], rows, "fallback", url, note=note)
-
-
-# ==========================================================================
-# OFFLINE FALLBACK CORPUS
-# --------------------------------------------------------------------------
-# ==========================================================================
+    return ScrapeResult(symbol, UNIVERSE[symbol], parse_history_table(_FALLBACK_PAGES[symbol], window), "fallback", url, note=note)
 
 _FALLBACK_PAGES: Dict[str, str] = {
     "EA": """<!DOCTYPE html>

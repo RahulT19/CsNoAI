@@ -1,32 +1,4 @@
-"""
-model.py — Data engineering + Ordinary Least Squares regression engine
-======================================================================
-Mathematics
------------
-For each target series y (daily High, daily Low) we map the trading
-sessions to an ordinal time index x = 1, 2, ..., n and fit the line
-
-    y_hat = m*x + c
-
-by minimising the residual sum of squares.  Solved through the normal
-equations in explicit matrix form,
-
-    X = [1  x]          (n x 2 design matrix)
-    beta = (X^T X)^-1 X^T y,      beta = [c, m]
-
-which is algebraically identical to the closed forms
-
-    m = ( n*sum(xy) - sum(x)*sum(y) ) / ( n*sum(x^2) - (sum(x))^2 )
-    c = mean(y) - m*mean(x)
-
-Goodness of fit is the coefficient of determination
-
-    R^2 = 1 - SS_res / SS_tot
-        = 1 - sum((y - y_hat)^2) / sum((y - mean(y))^2)
-
-The forecast for the next session is the model evaluated at x = n + 1.
-"""
-
+# model.py
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
@@ -41,12 +13,6 @@ class ModelError(ValueError):
     pass
 
 def build_frame(rows: Sequence[dict], window: int = 10) -> pd.DataFrame:
-    """Turn raw scraped strings into a clean, indexed time-series frame.
-
-    Steps: coerce to numeric, drop unusable sessions, de-duplicate repeated
-    dates, sort chronologically, clip to the trailing ``window`` sessions and
-    attach the ordinal regression index ``t = 1..n``.
-    """
     frame = pd.DataFrame(list(rows))
     if frame.empty:
         raise ModelError("no rows to model")
@@ -80,15 +46,15 @@ def build_frame(rows: Sequence[dict], window: int = 10) -> pd.DataFrame:
 
 @dataclass
 class OLSFit:
-    """A fitted simple-linear model plus its diagnostic statistics."""
-
     slope: float
     intercept: float
     r2: float
     n: int
-    std_error: float      
-    slope_stderr: float   
-    t_stat: float         
+    std_error: float
+    slope_stderr: float
+    intercept_stderr: float
+    slope_intercept_covariance: float
+    t_stat: float
     fitted: List[float]
 
     def predict(self, x) -> float | np.ndarray:
@@ -99,9 +65,16 @@ class OLSFit:
         payload["fitted"] = [round(v, 4) for v in self.fitted]
         return payload
 
+    def prediction_stderr(self, x: float) -> float:
+        mean_variance = (
+            (x ** 2) * (self.slope_stderr ** 2)
+            + self.intercept_stderr ** 2
+            + 2 * x * self.slope_intercept_covariance
+        )
+        return float(np.sqrt(max(0.0, mean_variance) + self.std_error ** 2))
+
 
 def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
-    """Least-squares fit of ``y = m*x + c`` via the normal equations."""
     xv = np.asarray(x, dtype=float)
     yv = np.asarray(y, dtype=float)
 
@@ -111,12 +84,11 @@ def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
     if n < MIN_SESSIONS:
         raise ModelError(f"need at least {MIN_SESSIONS} observations, got {n}")
 
-    design = np.column_stack([np.ones(n), xv])
-    gram = design.T @ design
-    moment = design.T @ yv
-    if abs(np.linalg.det(gram)) < 1e-12:
+    if np.ptp(xv) < 1e-12:
         raise ModelError("singular design matrix (zero variance in x)")
-    intercept, slope = np.linalg.solve(gram, moment)
+        
+    coefficients, covariance = np.polyfit(xv, yv, 1, cov=True)
+    slope, intercept = coefficients
 
     fitted = slope * xv + intercept
     residuals = yv - fitted
@@ -127,8 +99,9 @@ def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
 
     dof = n - 2
     sigma = float(np.sqrt(ss_res / dof)) if dof > 0 else 0.0
-    sxx = float(((xv - xv.mean()) ** 2).sum())
-    slope_stderr = sigma / np.sqrt(sxx) if sxx > 0 else float("inf")
+    slope_stderr = float(np.sqrt(max(0.0, covariance[0, 0])))
+    intercept_stderr = float(np.sqrt(max(0.0, covariance[1, 1])))
+    slope_intercept_covariance = float(covariance[0, 1])
     t_stat = slope / slope_stderr if slope_stderr not in (0.0, float("inf")) else 0.0
 
     return OLSFit(
@@ -137,15 +110,15 @@ def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
         r2=float(r2),
         n=int(n),
         std_error=sigma,
-        slope_stderr=float(slope_stderr),
+        slope_stderr=slope_stderr,
+        intercept_stderr=intercept_stderr,
+        slope_intercept_covariance=slope_intercept_covariance,
         t_stat=float(t_stat),
         fitted=[float(v) for v in fitted],
     )
 
 @dataclass
 class Forecast:
-    """Next-session projection for both the High and the Low series."""
-
     horizon: int
     predicted_high: float
     predicted_low: float
@@ -167,7 +140,6 @@ class Forecast:
 
 
 def forecast_next_session(frame: pd.DataFrame) -> Forecast:
-    """Fit independent High and Low models and evaluate them at x = n + 1."""
     x = frame["t"].to_numpy(dtype=float)
     high_model = fit_ols(x, frame["high"].to_numpy(dtype=float))
     low_model = fit_ols(x, frame["low"].to_numpy(dtype=float))
@@ -176,9 +148,6 @@ def forecast_next_session(frame: pd.DataFrame) -> Forecast:
     predicted_high = float(high_model.predict(horizon))
     predicted_low = float(low_model.predict(horizon))
 
-    # The two lines are fitted independently and can cross on a converging
-    # series; enforce the structural invariant High >= Low before it reaches
-    # the strategy layer.
     if predicted_low > predicted_high:
         predicted_high, predicted_low = predicted_low, predicted_high
 
@@ -194,7 +163,6 @@ def forecast_next_session(frame: pd.DataFrame) -> Forecast:
 
 
 def series_payload(frame: pd.DataFrame, forecast: Forecast) -> Dict[str, list]:
-    """Chart-ready arrays: actuals for days 1..n, trendlines out to n+1."""
     x_extended = np.append(frame["t"].to_numpy(dtype=float), float(forecast.horizon))
     return {
         "labels": frame["label"].tolist() + ["Day 11"],

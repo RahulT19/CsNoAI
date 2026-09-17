@@ -1,0 +1,17 @@
+import db
+
+# Initialize the database connection
+database = db.get_db()
+
+if database is not None:
+    print("✅ Connected to MongoDB Atlas successfully.")
+    
+    # Check predictions collection
+    pred_count = database.predictions.count_documents({})
+    print(f"Total predictions saved: {pred_count}")
+    
+    # Check history collection for a specific ticker
+    ea_history = db.get_history("EA")
+    print(f"Found {len(ea_history)} historical rows saved for EA.")
+else:
+    print("❌ Could not connect to MongoDB Atlas.")

@@ -1,3 +1,4 @@
+# db.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ except ImportError:
     MongoClient = None
     PyMongoError = Exception
 
+# Your live MongoDB Atlas connection string
 MONGO_URI = os.environ.get("CSNOAI_MONGO_URI", "mongodb+srv://rahulrohit192005_db_user:SjZ7feb8w8VNV2Ct@rahul19.bouv8j5.mongodb.net/?appName=Rahul19")
 DATABASE_NAME = os.environ.get("CSNOAI_MONGO_DATABASE", "csnoai_gaming_db")
 _client: Any = None
@@ -75,6 +77,7 @@ def save_history(ticker: str, company: str, rows: list, source: str) -> bool:
     database = get_db()
     if database is not None:
         try:
+            # Uses $set so we update history without deleting the prediction alongside it
             database.stock_history.update_one({"ticker": symbol}, {"$set": document}, upsert=True)
             return True
         except PyMongoError:
@@ -97,14 +100,35 @@ def get_history(ticker: str) -> list:
 
 
 def save_prediction(ticker: str, forecast_data: dict, signal_data: dict) -> bool:
-    document = {"ticker": ticker.upper().strip(), "forecast": forecast_data,
-                "signal": signal_data, "created_at": datetime.now(timezone.utc)}
+    symbol = ticker.upper().strip()
+    
+    # Flatten the data so it's actually useful and readable in Atlas
+    useful_prediction = {
+        "ticker": symbol,
+        "action": signal_data.get("action"),
+        "predicted_high": forecast_data.get("predicted_high"),
+        "predicted_low": forecast_data.get("predicted_low"),
+        "upside_pct": signal_data.get("upside_pct"),
+        "downside_pct": signal_data.get("downside_pct"),
+        "confidence": signal_data.get("confidence"),
+        "reasons": signal_data.get("reasons"),
+        "created_at": datetime.now(timezone.utc)
+    }
+    
     database = get_db()
     if database is not None:
         try:
-            database.predictions.insert_one(document)
+            # 1. Save it to the predictions audit log
+            database.predictions.insert_one(useful_prediction.copy())
+            
+            # 2. Attach this prediction ALONGSIDE the stock history document
+            database.stock_history.update_one(
+                {"ticker": symbol}, 
+                {"$set": {"latest_prediction": useful_prediction}}
+            )
             return True
         except PyMongoError:
             pass
-    _memory_predictions.append(document)
+            
+    _memory_predictions.append(useful_prediction)
     return False
