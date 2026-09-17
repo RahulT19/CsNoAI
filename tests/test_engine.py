@@ -1,14 +1,3 @@
-"""
-tests/test_engine.py — regression tests for the CsNoAI engine
-=================================================================
-Run from the project root:  python -m tests.test_engine
-                       or:  python -m pytest tests -q   (pytest optional)
-
-The suite is written with plain ``assert`` statements and a tiny runner so it
-executes with or without pytest installed — a deliberate choice so an
-evaluator can verify the maths on any machine.
-"""
-
 from __future__ import annotations
 
 import os
@@ -126,6 +115,16 @@ def test_ols_matches_numpy_polyfit():
         assert abs(fit.intercept - intercept) < 1e-9
 
 
+def test_ols_uses_numpy_covariance_for_parameter_uncertainty():
+    x = np.arange(1, 11, dtype=float)
+    y = np.array([12, 14, 13, 17, 16, 19, 21, 20, 24, 26], dtype=float)
+    _, covariance = np.polyfit(x, y, 1, cov=True)
+    fit = model.fit_ols(x, y)
+    assert abs(fit.slope_stderr - np.sqrt(covariance[0, 0])) < 1e-12
+    assert abs(fit.intercept_stderr - np.sqrt(covariance[1, 1])) < 1e-12
+    assert fit.prediction_stderr(11) >= fit.std_error
+
+
 def test_ols_matches_the_closed_form_summation_identity():
     x = np.arange(1, 11, dtype=float)
     y = np.array([12, 14, 13, 17, 16, 19, 21, 20, 24, 26], dtype=float)
@@ -198,6 +197,10 @@ def test_sell_overrides_a_tempting_upside():
 
 def test_hold_when_nothing_triggers():
     assert _signal(100, 100.8, 99.6) == strategy.HOLD
+
+
+def test_low_confidence_overrides_price_based_signal():
+    assert _signal(100, 103.0, 97.0, r2=0.39) == strategy.HOLD
 
 
 def test_signal_reports_percentages_and_risk_reward():

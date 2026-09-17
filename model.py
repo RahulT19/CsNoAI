@@ -1,9 +1,6 @@
 """
 model.py — Data engineering + Ordinary Least Squares regression engine
 ======================================================================
-Owners: Member 2 (Data Engineer) and Member 3 (Quantitative Modeler),
-        with Member 4 (Predictive Analyst) supplying the R^2 / forecast layer.
-
 Mathematics
 -----------
 For each target series y (daily High, daily Low) we map the trading
@@ -28,7 +25,6 @@ Goodness of fit is the coefficient of determination
         = 1 - sum((y - y_hat)^2) / sum((y - mean(y))^2)
 
 The forecast for the next session is the model evaluated at x = n + 1.
-Everything is transparent arithmetic — no black-box estimator anywhere.
 """
 
 from __future__ import annotations
@@ -41,14 +37,8 @@ import pandas as pd
 
 MIN_SESSIONS = 3
 
-
 class ModelError(ValueError):
-    """Raised when the cleaned frame cannot support a regression."""
-
-
-# --------------------------------------------------------------------------
-# Member 2 — data engineering
-# --------------------------------------------------------------------------
+    pass
 
 def build_frame(rows: Sequence[dict], window: int = 10) -> pd.DataFrame:
     """Turn raw scraped strings into a clean, indexed time-series frame.
@@ -88,11 +78,6 @@ def build_frame(rows: Sequence[dict], window: int = 10) -> pd.DataFrame:
     frame["range"] = frame["high"] - frame["low"]
     return frame
 
-
-# --------------------------------------------------------------------------
-# Member 3 — the regression itself
-# --------------------------------------------------------------------------
-
 @dataclass
 class OLSFit:
     """A fitted simple-linear model plus its diagnostic statistics."""
@@ -101,9 +86,9 @@ class OLSFit:
     intercept: float
     r2: float
     n: int
-    std_error: float
-    slope_stderr: float
-    t_stat: float
+    std_error: float      
+    slope_stderr: float   
+    t_stat: float         
     fitted: List[float]
 
     def predict(self, x) -> float | np.ndarray:
@@ -157,11 +142,6 @@ def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
         fitted=[float(v) for v in fitted],
     )
 
-
-# --------------------------------------------------------------------------
-# Member 4 — multi-target forecasting
-# --------------------------------------------------------------------------
-
 @dataclass
 class Forecast:
     """Next-session projection for both the High and the Low series."""
@@ -196,6 +176,9 @@ def forecast_next_session(frame: pd.DataFrame) -> Forecast:
     predicted_high = float(high_model.predict(horizon))
     predicted_low = float(low_model.predict(horizon))
 
+    # The two lines are fitted independently and can cross on a converging
+    # series; enforce the structural invariant High >= Low before it reaches
+    # the strategy layer.
     if predicted_low > predicted_high:
         predicted_high, predicted_low = predicted_low, predicted_high
 

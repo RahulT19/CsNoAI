@@ -1,24 +1,3 @@
-"""
-scraper.py — HTML DOM extraction layer
-======================================
-Owner: Member 1 (Scraper Architect)
-
-Responsibility
---------------
-Fetch a *raw HTML document* for a gaming-sector equity and recover the
-10 most recent trading sessions by walking the Document Object Model with
-BeautifulSoup's built-in ``html.parser``.
-
-Design rules enforced in this module
-------------------------------------
-* No JSON endpoints, no CSV downloads, no API wrappers (``yfinance`` et al.).
-  We request an HTML page and traverse ``<table> -> <thead>/<tbody> -> <tr> -> <td>``.
-* No recursive crawling: exactly one static quote page per ticker.
-* The demo must never die on stage. If the live request is blocked, rate
-  limited, or the DOM shape changes, we fall back to a hardcoded HTML
-  document that is parsed through *the identical* BeautifulSoup code path.
-"""
-
 from __future__ import annotations
 
 import datetime as dt
@@ -75,12 +54,10 @@ _DATE_FORMATS = ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%d %b %Y")
 
 
 class ScrapeError(RuntimeError):
-    """Raised when a document cannot be parsed into usable price rows."""
 
 
 @dataclass
 class ScrapeResult:
-    """Everything the downstream Data Engineer needs, plus provenance."""
 
     ticker: str
     company: str
@@ -98,7 +75,6 @@ class ScrapeResult:
 # --------------------------------------------------------------------------
 
 def _clean_number(text: str) -> Optional[float]:
-    """'1,234.56' -> 1234.56 ; '-' / 'N/A' / '' -> None."""
     if text is None:
         return None
     cleaned = text.replace(",", "").replace("$", "").strip()
@@ -111,7 +87,6 @@ def _clean_number(text: str) -> Optional[float]:
 
 
 def _clean_date(text: str) -> Optional[dt.date]:
-    """Parse the several date spellings financial portals use."""
     candidate = re.sub(r"\s+", " ", (text or "")).strip()
     for fmt in _DATE_FORMATS:
         try:
@@ -122,12 +97,10 @@ def _clean_date(text: str) -> Optional[dt.date]:
 
 
 def _cell_text(cell) -> str:
-    """Flatten a ``<td>``/``<th>`` node, dropping screen-reader tooltips."""
     return re.sub(r"\s+", " ", cell.get_text(" ", strip=True)).strip()
 
 
 def _header_map(table) -> Dict[int, str]:
-    """Map column index -> canonical field name by reading the header row."""
     head = table.find("thead")
     header_row = head.find("tr") if head else table.find("tr")
     if header_row is None:
@@ -152,13 +125,6 @@ def _looks_like_price_table(mapping: Dict[int, str]) -> bool:
 # --------------------------------------------------------------------------
 
 def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
-    """Extract up to ``window`` OHLC rows from a raw HTML document.
-
-    The traversal is deliberately explicit so it can be defended line by
-    line: ``BeautifulSoup(html, "html.parser")`` builds the DOM, we select
-    every ``<table>``, identify the price table from its ``<th>`` labels,
-    then iterate ``<tbody>`` ``<tr>`` nodes and read the ``<td>`` cells.
-    """
     soup = BeautifulSoup(html, "html.parser")
 
     target, mapping = None, {}
@@ -218,7 +184,6 @@ def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
 
 
 def fetch_html(ticker: str, timeout: int = REQUEST_TIMEOUT) -> str:
-    """GET the raw HTML document for ``ticker`` with browser-like headers."""
     url = SOURCE_URL.format(ticker=ticker)
     response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
@@ -226,7 +191,6 @@ def fetch_html(ticker: str, timeout: int = REQUEST_TIMEOUT) -> str:
 
 
 def get_history(ticker: str, window: int = WINDOW, allow_live: bool = True) -> ScrapeResult:
-    """Use persisted history first, then live HTML, then the offline corpus."""
     symbol = ticker.upper().strip()
     if symbol not in UNIVERSE:
         raise ScrapeError(f"{symbol!r} is outside the configured gaming universe")

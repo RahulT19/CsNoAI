@@ -1,8 +1,8 @@
-"""Offline-safe local MongoDB persistence for CsNoAI."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
+import os
 from typing import Any
 
 try:
@@ -12,8 +12,8 @@ except ImportError:
     MongoClient = None
     PyMongoError = Exception
 
-MONGO_URI = "mongodb://localhost:27017/"
-DATABASE_NAME = "csnoai_gaming_db"
+MONGO_URI = os.environ.get("CSNOAI_MONGO_URI", "mongodb+srv://rahulrohit192005_db_user:SjZ7feb8w8VNV2Ct@rahul19.bouv8j5.mongodb.net/?appName=Rahul19")
+DATABASE_NAME = os.environ.get("CSNOAI_MONGO_DATABASE", "csnoai_gaming_db")
 _client: Any = None
 _database: Any = None
 _connection_checked = False
@@ -21,9 +21,20 @@ _memory_history: dict[str, dict] = {}
 _memory_predictions: list[dict] = []
 
 
-def get_db():
-    """Return the configured Mongo database, or None if its daemon is offline."""
+def configure_connection(connection_string: str | None = None, database_name: str | None = None):
+    global MONGO_URI, DATABASE_NAME, _client, _database, _connection_checked
+    if connection_string:
+        MONGO_URI = connection_string
+    if database_name:
+        DATABASE_NAME = database_name
+    _client = _database = None
+    _connection_checked = False
+
+
+def get_db(connection_string: str | None = None, database_name: str | None = None):
     global _client, _database, _connection_checked
+    if connection_string or database_name:
+        configure_connection(connection_string, database_name)
     if _connection_checked:
         return _database
     _connection_checked = True
@@ -58,7 +69,6 @@ def _clean_rows(rows: list) -> list[dict]:
 
 
 def save_history(ticker: str, company: str, rows: list, source: str) -> bool:
-    """Upsert ten cleaned sessions; use memory when MongoDB is unavailable."""
     symbol = ticker.upper().strip()
     document = {"ticker": symbol, "company": company, "rows": _clean_rows(rows),
                 "source": source, "updated_at": datetime.now(timezone.utc)}
@@ -74,7 +84,6 @@ def save_history(ticker: str, company: str, rows: list, source: str) -> bool:
 
 
 def get_history(ticker: str) -> list:
-    """Retrieve stored sessions for a ticker from MongoDB or local memory."""
     symbol = ticker.upper().strip()
     database = get_db()
     if database is not None:
@@ -88,7 +97,6 @@ def get_history(ticker: str) -> list:
 
 
 def save_prediction(ticker: str, forecast_data: dict, signal_data: dict) -> bool:
-    """Log model parameters, Day 11 bounds and the final verdict."""
     document = {"ticker": ticker.upper().strip(), "forecast": forecast_data,
                 "signal": signal_data, "created_at": datetime.now(timezone.utc)}
     database = get_db()

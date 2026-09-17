@@ -1,4 +1,3 @@
-"""Tkinter desktop interface for CsNoAI."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -58,7 +57,7 @@ class CsNoAIApp(tk.Tk):
 
     def _render(self, scraped, frame, forecast, signal):
         self.verdict.configure(text=f"{signal.action}  |  Upside {signal.upside_pct:+.2f}%  |  Downside {signal.downside_pct:+.2f}%  |  Confidence {signal.confidence:.1f}%", bg=ACTION_COLOURS[signal.action])
-        self.high_metrics.set(self._metrics_text("High", forecast.high_model)); self.low_metrics.set(self._metrics_text("Low", forecast.low_model))
+        self.high_metrics.set(self._metrics_text("High", forecast.high_model, forecast.horizon)); self.low_metrics.set(self._metrics_text("Low", forecast.low_model, forecast.horizon))
         self.table.delete(*self.table.get_children())
         for _, row in frame.iterrows():
             volume = "—" if row["volume"] != row["volume"] else f"{int(row['volume']):,}"
@@ -69,8 +68,8 @@ class CsNoAIApp(tk.Tk):
         self.status.set(f"{origin} | {database}")
 
     @staticmethod
-    def _metrics_text(name, fit):
-        return f"{name}: y = {fit.slope:.4f} * x + {fit.intercept:.4f}  |  slope (m) = {fit.slope:.4f}  |  intercept (c) = {fit.intercept:.4f}  |  R² = {fit.r2:.4f}"
+    def _metrics_text(name, fit, horizon):
+        return f"{name}: y = {fit.slope:.4f} * x + {fit.intercept:.4f}  |  slope SE = {fit.slope_stderr:.4f}  |  intercept SE = {fit.intercept_stderr:.4f}  |  R² = {fit.r2:.4f}  |  Day {horizon} forecast SE = {fit.prediction_stderr(horizon):.4f}"
 
     def save_to_db(self):
         if self.current is None:

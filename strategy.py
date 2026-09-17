@@ -1,31 +1,3 @@
-"""
-strategy.py — Algorithmic decision engine
-=========================================
-Owner: Member 5 (Algorithm Designer)
-
-Translates the statistical output of :mod:`model` into an actionable
-BUY / SELL / HOLD instruction using percentage risk boundaries.
-
-    Potential Upside = (H_hat_{t+1} - Close_t) / Close_t
-    Downside Risk    = (Close_t - L_hat_{t+1}) / Close_t
-
-Decision table (evaluated top to bottom — first match wins)
------------------------------------------------------------
-1. SELL / TAKE PROFIT  if Downside Risk >= 1.5%  OR  slope(High) < 0
-2. BUY                 if Upside >= 1.5%  AND  R^2(High) > 0.40
-                          AND slope(High) > 0            [trend confirmation]
-3. HOLD                otherwise
-
-Rule 1 is deliberately a capital-preservation *override*: a stock can show
-a large projected upside and a large projected downside at the same time
-(a widening high-low spread).  In that regime the engine refuses to buy.
-
-Rule 2 carries a third clause beyond the raw upside test.  R^2 > 0.40 means
-the trendline actually explains the recent path rather than fitting noise,
-and a positive slope stops the engine from buying a falling knife whose
-projected high merely sits above today's depressed close.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -75,7 +47,6 @@ def evaluate(
     slope_high: float,
     slope_low: float,
 ) -> Signal:
-    """Apply the decision table to one forecast and explain the verdict."""
     if current_close <= 0:
         raise ValueError("current close must be positive")
 
@@ -88,6 +59,21 @@ def evaluate(
     risk_reward = (upside / downside) if downside > 0 else None
 
     reasons: List[str] = []
+
+    if r2_high < R2_CONFIDENCE or r2_low < R2_CONFIDENCE:
+        if r2_high < R2_CONFIDENCE:
+            reasons.append(
+                f"R^2(High) = {r2_high:.3f} is below the {R2_CONFIDENCE:.2f} confidence gate."
+            )
+        if r2_low < R2_CONFIDENCE:
+            reasons.append(
+                f"R^2(Low) = {r2_low:.3f} is below the {R2_CONFIDENCE:.2f} confidence gate."
+            )
+        reasons.append("Forecast is downgraded to HOLD because the 10-session trend is not reliable enough.")
+        return Signal(
+            HOLD, "Insufficient model confidence",
+            upside_pct, downside_pct, risk_reward, confidence, reasons,
+        )
 
     # ---- Rule 1: capital-preservation override ------------------------
     if downside >= DOWNSIDE_THRESHOLD or slope_high < 0:
@@ -154,7 +140,6 @@ def evaluate(
 
 
 def evaluate_forecast(current_close: float, forecast) -> Signal:
-    """Convenience adapter over a :class:`model.Forecast` object."""
     return evaluate(
         current_close=current_close,
         predicted_high=forecast.predicted_high,

@@ -1,182 +1,162 @@
-## CsNoAI - Gaming & Esports Sector Forecast Engine
+# CsNoAI - Gaming & Esports Sector Forecast Engine
 
-CsNoAI is a standalone desktop application built with Python's native Tkinter and PyMongo that automates quantitative forecasting and signal generation for listed gaming and esports equities. The system ingests raw HTML price tables, cleans and indexes rolling historical sessions using pandas, computes independent Ordinary Least Squares (OLS) regression models for daily High and Low prices in NumPy, and executes a rule-based decision algorithm yielding actionable BUY, SELL, or HOLD signals.
+CsNoAI is a standalone desktop application built with Python's Tkinter and
+PyMongo. It parses stock-history HTML, cleans the sessions with pandas, fits
+independent Ordinary Least Squares (OLS) models for High and Low prices with
+NumPy, and produces an explainable BUY, SELL, or HOLD signal.
 
-The system tracks five listed gaming and technology equities:
+Tracked equities:
 
-* `EA`: Electronic Arts Inc.
+- `EA` — Electronic Arts Inc.
+- `TTWO` — Take-Two Interactive Software, Inc.
+- `SONY` — Sony Group Corporation.
+- `NTDOY` — Nintendo Co., Ltd.
+- `NVDA` — NVIDIA Corporation.
 
+> This is an academic stock-analysis demonstration, not a trading system or
+> investment advice. A 10-session linear model cannot reliably predict markets.
 
-* `TTWO`: Take-Two Interactive Software, Inc.
+## Files to understand
 
+| File | Responsibility |
+| --- | --- |
+| `main.py` | Tkinter window, controls, results table, metrics, verdict card, audit log, and status bar. |
+| `scraper.py` | HTML parser, five-ticker universe, live request logic, MongoDB cache lookup, and offline fallback pages. |
+| `model.py` | Data cleaning, OLS fitting, R-squared, parameter uncertainty, and Day 11 forecast uncertainty. |
+| `strategy.py` | BUY, SELL, HOLD thresholds and human-readable audit reasons. |
+| `db.py` | Configurable MongoDB connection, history cache, prediction logging, and in-memory fallback. |
+| `tests/test_engine.py` | Plain-assert tests for parsing, cleaning, model math, strategy rules, and persistence. |
 
-* `SONY`: Sony Group Corporation
+## Architecture
 
-
-* `NTDOY`: Nintendo Co., Ltd.
-
-
-* `NVDA`: NVIDIA Corporation
-
-
-
----
-
-## Architecture & Data Pipeline
-
-The application employs a strictly decoupled, unidirectional pipeline where each stage has a single upstream source and downstream consumer:
-
+```text
+HTML scraper / fallback corpus
+        |
+        v
+pandas cleaning and t = 1..10 indexing
+        |
+        v
+NumPy OLS models for High and Low
+        |
+        v
+Strategy confidence gate and BUY / SELL / HOLD decision
+        |
+        v
+Tkinter presentation and MongoDB persistence
 ```
-[ HTML Scraper / Corpus ]  (requests + BeautifulSoup / _FALLBACK_PAGES)
-           │
-           ▼  raw session dicts
-[ Data Engineering ]       (pandas: cleaning, repair, ordinal indexing t = 1..10)
-           │
-           ▼  cleaned DataFrame
-[ Quantitative Engine ]    (NumPy OLS: slope, intercept, R², forecast at t = 11)
-           │
-           ▼  Forecast dataclass
-[ Algorithmic Strategy ]   (Risk boundaries & capital-preservation override)
-           │
-           ▼  Signal dataclass
-[ Presentation & Storage ] (Tkinter UI + PyMongo persistence)
 
+The scraper first checks stored history. If no cache is available, it attempts
+live scraping only when enabled; otherwise, or after a failure, it uses the
+bundled fallback HTML. This keeps demonstrations deterministic and usable
+without internet access.
+
+## Quantitative methodology
+
+For High and Low independently, the app fits a line:
+
+```text
+y = m * t + c
 ```
 
-1. **Extraction (`scraper.py`)**: Fetches raw HTML tables using `requests` with desktop browser headers, traversing the DOM with `BeautifulSoup` (`html.parser`). Non-price rows (dividends, stock splits) are ignored. When live network access is disabled or throttled, an embedded offline snapshot corpus (`_FALLBACK_PAGES`) parses through the identical extraction logic to guarantee zero runtime failures during demonstrations.
+`m` is the slope (average movement per session) and `c` is the intercept.
+The app uses `numpy.polyfit(t, y, 1, cov=True)`: it returns the fitted slope,
+intercept, and a covariance matrix. The covariance diagonal supplies slope and
+intercept standard errors. The model also computes:
 
+- `R-squared`: how closely the line fits these ten observations.
+- Residual standard error.
+- Day 11 prediction standard error: uncertainty around the next-session point
+  estimate, not a guaranteed price range.
 
-2. **Data Engineering (`model.py`)**: Coerces scraped strings into numeric types, eliminates missing data, de-duplicates session dates, clips observations to a rolling 10-session window ($n = 10$), repairs inverted High/Low anomalies, and assigns an ordinal regression index $t \in \{1, 2, \dots, 10\}$.
+The High and Low lines are evaluated at `t = 11`. If they cross, the output is
+reordered so predicted High is never below predicted Low.
 
+## Decision algorithm
 
-3. **Quantitative Modeling (`model.py`)**: Fits two independent Ordinary Least Squares linear trendlines for daily High and Low series against ordinal time $t$. Evaluates goodness of fit ($R^2$), slope standard error, and projects price boundaries for the next trading session ($t = 11$).
+The current closing price is compared with the predicted Day 11 bounds:
 
+```text
+upside   = (predicted_high - close) / close
+downside = (close - predicted_low) / close
+```
 
-4. **Decision Engine (`strategy.py`)**: Computes potential percentage upside and downside against the latest close ($Close_t$), evaluating hierarchical risk boundaries.
+| Priority | Condition | Result |
+| --- | --- | --- |
+| 1 | Either High or Low R-squared is below `0.40` | HOLD — insufficient confidence |
+| 2 | Downside is at least `1.5%`, or High slope is negative | SELL |
+| 3 | Upside is at least `1.5%`, High R-squared is above `0.40`, and High slope is positive | BUY |
+| 4 | Anything else | HOLD |
 
+The confidence gate intentionally comes first: an attractive-looking price
+boundary is not trusted when either 10-session regression is weak.
 
-5. **Desktop UI & Persistence (`main.py`, `db.py`)**: Presents interactive controls, tabular historical prices, model equations, and visual signal badges in Tkinter, persisting run records to MongoDB.
+## Installation and execution
 
-
-
----
-
-## Quantitative Methodology
-
-### 1. Ordinary Least Squares (OLS)
-
-For each price series $y$ (High and Low independently), the engine minimizes the residual sum of squares $\sum (y_i - \hat{y}_i)^2$ for the line $\hat{y} = m \cdot t + c$:
-
-$$m = \frac{n \sum (t \cdot y) - \sum t \sum y}{n \sum t^2 - (\sum t)^2}, \quad c = \bar{y} - m\bar{t}$$
-
-The implementation solves the normal equations over the design matrix $X = [\mathbf{1} \quad \mathbf{t}]$ via NumPy's matrix solver rather than manual inversion, maximizing numerical stability.
-
-### 2. Goodness of Fit & Variance Protection
-
-Model explanatory power is captured via the coefficient of determination:
-
-$$R^2 = 1 - \frac{SS_{\text{res}}}{SS_{\text{tot}}} = 1 - \frac{\sum (y_i - \hat{y}_i)^2}{\sum (y_i - \bar{y})^2}$$
-
-* If a series exhibits zero variance ($SS_{\text{tot}} \approx 0$), the engine forces $R^2 = 0.0$ to eliminate divide-by-zero exceptions.
-
-
-* Residual variance ($\hat{\sigma}$) and slope standard error determine parameter stability across the 8 degrees of freedom ($n - 2$).
-
-
-
-### 3. Horizon Forecast
-
-Both fitted lines project forward to session $t = 11$:
-
-$$\hat{H}_{11} = m_H \cdot 11 + c_H, \quad \hat{L}_{11} = m_L \cdot 11 + c_L$$
-
-Because the High and Low models are fitted independently, lines can cross on converging series; the engine structurally enforces $\hat{H}_{11} \ge \hat{L}_{11}$ before passing forecasts to the strategy layer.
-
----
-
-## Decision Algorithm
-
-Signals are evaluated relative to the current closing price:
-
-$$\text{Potential Upside} = \frac{\hat{H}_{11} - Close_t}{Close_t} \times 100, \quad \text{Downside Risk} = \frac{Close_t - \hat{L}_{11}}{Close_t} \times 100$$
-
-Evaluated strictly top-to-bottom (**first matching condition triggers the signal**):
-
-| Priority | Condition | Verdict | Justification |
-| --- | --- | --- | --- |
-| **1** | $\text{Downside Risk} \ge 1.5\%$ **or** $m_H < 0$<br> | **SELL**<br> | **Capital Preservation Override**: Halts purchases into decaying trends ($m_H < 0$) or widening high-low spreads with significant drawdown potential.
-
- |
-| **2** | $\text{Upside} \ge 1.5\%$ **and** $R^2_H > 0.40$ **and** $m_H > 0$<br> | **BUY**<br> | **Qualified Entry**: Requires demonstrable upward drift, positive trajectory, and statistical confidence above random noise.
-
- |
-| **3** | All other market conditions
-
- | **HOLD**<br> | **Neutral Stance**: Price volatility sits within the noise band; no statistical edge exists.
-
- |
-
----
-
-## Installation & Execution
-
-### Prerequisites
-
-* Python 3.10+ (Ensure **Add Python to PATH** is checked during installation)
-* MongoDB Community Server (Optional; default port `27017`)
-
-### Setup Commands (PowerShell)
+Install Python 3.10+ and select **Add Python to PATH** during installation.
+Then run this in PowerShell:
 
 ```powershell
-cd CSNoAI
+cd C:\Users\raksh\Desktop\my-code\CSNoAI
 py -m pip install -r requirements.txt
 py main.py
-
 ```
 
-*(If the `py` launcher is unconfigured, run `python main.py` directly.)*
+Leave **Use Live Scraping** unchecked for the most reliable demonstration. The
+included fallback data works without network access.
 
-### Operational Controls
+## MongoDB setup
 
-* **Use Live Scraping Checkbox**: Disabled by default. Running with it unchecked parses the bundled HTML fallback corpus, enabling completely deterministic and offline evaluations without network dependencies.
+MongoDB is optional. If no server is reachable, the app stays usable with an
+in-memory fallback for the current run.
 
+By default, `db.py` uses local MongoDB at `mongodb://localhost:27017/` and
+database `csnoai_gaming_db`. It stores clean sessions in `stock_history` and
+forecast/signal snapshots in `predictions`.
 
-* **MongoDB Integration**: Connects to `mongodb://localhost:27017/` on database `csnoai_gaming_db`. If MongoDB is not running, `db.py` automatically degrades to an in-memory fallback without interrupting analysis or throwing fatal errors.
-
----
-
-## Verification & Test Suite
-
-Run the built-in regression test harness directly from PowerShell:
+For MongoDB Atlas or another MongoDB server, set the URI outside the codebase:
 
 ```powershell
-py -m tests.test_engine
-
+$env:CSNOAI_MONGO_URI = 'your-mongodb-connection-string'
+$env:CSNOAI_MONGO_DATABASE = 'csnoai_gaming_db'
+py main.py
 ```
 
-The test runner utilizes standard Python `assert` statements without third-party test framework requirements:
+Never commit a connection string or password. `.env` is ignored by Git. If a
+credential was pasted into a chat, terminal recording, or Git commit, rotate
+the database password before using it.
 
-* Validates HTML price table parsing, coordinate scraping, and fallback loading.
+## Tests
 
+```powershell
+cd C:\Users\raksh\Desktop\my-code\CSNoAI
+py -m tests.test_engine
+```
 
-* Validates data engineering pipelines, column coersion, and monotonic index generation.
+The test runner uses standard `assert` statements; pytest is not required.
 
+## Demonstration plan
 
-* Pins OLS regression outputs ($m$, $c$, $R^2$) against `numpy.polyfit` to a numerical tolerance of $10^{-9}$.
+1. Start the app with live scraping off and select `EA`.
+2. Click **Run Analysis** and point out the status-bar source.
+3. Show the ten cleaned sessions and explain `t = 1..10`.
+4. Explain the High/Low equations, R-squared, and forecast standard error.
+5. Read the audit log to show why the result is BUY, SELL, or HOLD.
+6. Click **Save to MongoDB** and explain that history and the prediction are
+   persisted when MongoDB is connected.
+7. Optionally enable live scraping and explain the offline fallback safety net.
 
+## Limitations and common questions
 
-* Validates boundary decisions, sell overrides, and edge handling across all five tracked equities.
+**Why ten sessions?** It makes the model easy to explain and demo, but it is a
+small sample with only eight residual degrees of freedom.
 
+**Why separate High and Low models?** Their Day 11 estimates create a possible
+range for calculating upside and downside relative to the latest close.
 
+**Does high R-squared mean the forecast is correct?** No. It measures fit to
+the ten observations only; it does not account for news, earnings, market
+events, mean reversion, or nonlinear volatility.
 
----
-
-## Project Limitations
-
-* **Linear Horizon Limit**: Linear extrapolation over 10 trading sessions captures immediate directional momentum only. It does not incorporate mean reversion, earnings surprises, or non-linear macroeconomic volatility.
-
-
-* **Sample Size**: Fitting across $n = 10$ sessions leaves 8 degrees of freedom - sufficient for directional screening, but sensitive to individual outlier sessions.
-
-
-* **Academic Scope**: Outputs are educational signals derived from quantitative coursework rules and do not constitute financial advice.
+**What happens if MongoDB or the internet is unavailable?** The application
+falls back safely: stored cache when present, otherwise offline HTML data, and
+in-memory persistence when MongoDB is offline.
