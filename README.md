@@ -1,4 +1,4 @@
-## CsNoAI — Gaming & Esports Sector Forecast Engine
+## CsNoAI - Gaming & Esports Sector Forecast Engine
 
 CsNoAI is a standalone desktop application built with Python's native Tkinter and PyMongo that automates quantitative forecasting and signal generation for listed gaming and esports equities. The system ingests raw HTML price tables, cleans and indexes rolling historical sessions using pandas, computes independent Ordinary Least Squares (OLS) regression models for daily High and Low prices in NumPy, and executes a rule-based decision algorithm yielding actionable BUY, SELL, or HOLD signals.
 
@@ -176,7 +176,7 @@ The test runner utilizes standard Python `assert` statements without third-party
 * **Linear Horizon Limit**: Linear extrapolation over 10 trading sessions captures immediate directional momentum only. It does not incorporate mean reversion, earnings surprises, or non-linear macroeconomic volatility.
 
 
-* **Sample Size**: Fitting across $n = 10$ sessions leaves 8 degrees of freedom—sufficient for directional screening, but sensitive to individual outlier sessions.
+* **Sample Size**: Fitting across $n = 10$ sessions leaves 8 degrees of freedom - sufficient for directional screening, but sensitive to individual outlier sessions.
 
 
 * **Academic Scope**: Outputs are educational signals derived from quantitative coursework rules and do not constitute financial advice.
