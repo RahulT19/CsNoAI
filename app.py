@@ -1,13 +1,5 @@
 """
 app.py — Flask application server and JSON API
-==============================================
-Owner: Member 7 (Integration & Versioning)
-
-Wires the four independent backend modules into one pipeline:
-
-    scraper.get_history  ->  model.build_frame  ->  model.forecast_next_session
-                         ->  strategy.evaluate_forecast  ->  JSON  ->  dashboard
-
 Routes
 ------
 GET  /                       the dashboard shell (server-rendered)
@@ -45,18 +37,11 @@ log = logging.getLogger("csnoai")
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
-#: Live scraping is opt-in. Financial portals throttle aggressively, and a
-#: classroom/demo network is exactly where that bites, so the default path is
-#: the offline HTML corpus. Set CSNOAI_LIVE=1 (or pass --live) to enable.
 LIVE_DEFAULT = os.environ.get("CSNOAI_LIVE", "0") == "1"
 
-#: Absolute origin used for canonical URLs, Open Graph tags and the sitemap.
-#: Unset it and the app derives the origin from the incoming request, which is
-#: correct on localhost; set it once a real domain is pointed at the service:
-#:     CSNOAI_SITE_URL=https://csnoai.example.edu
 SITE_URL = os.environ.get("CSNOAI_SITE_URL", "").rstrip("/")
 
-CACHE_TTL = 300  # seconds; one scrape per symbol per 5 minutes
+CACHE_TTL = 300
 _CACHE: Dict[Tuple[str, bool], Tuple[float, dict]] = {}
 
 
@@ -189,7 +174,7 @@ def api_analyze(ticker: str):
         return jsonify({"error": "scrape_failed", "detail": str(exc)}), 404
     except model.ModelError as exc:
         return jsonify({"error": "model_failed", "detail": str(exc)}), 422
-    except Exception as exc:                                    # pragma: no cover
+    except Exception as exc:
         log.exception("unhandled failure for %s", ticker)
         return jsonify({"error": "internal_error", "detail": str(exc)}), 500
     return jsonify(payload)
@@ -203,7 +188,7 @@ def api_analyze_all():
     for symbol in scraper.UNIVERSE:
         try:
             results.append(analyze_cached(symbol, allow_live, refresh))
-        except Exception as exc:                                # pragma: no cover
+        except Exception as exc:
             log.warning("skipping %s: %s", symbol, exc)
             errors.append({"ticker": symbol, "detail": str(exc)})
 
@@ -356,7 +341,7 @@ def page_not_found(error):
 
 
 @app.errorhandler(500)
-def internal_error(error):                                      # pragma: no cover
+def internal_error(error):
     if request.path.startswith("/api/"):
         return jsonify({"error": "internal_error", "detail": "unhandled failure"}), 500
     return render_template("500.html"), 500

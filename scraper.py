@@ -29,11 +29,12 @@ from typing import Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 
+import db
+
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
 
-#: Gaming & esports sector universe tracked by CsNoAI.
 UNIVERSE: Dict[str, str] = {
     "EA": "Electronic Arts Inc.",
     "TTWO": "Take-Two Interactive Software, Inc.",
@@ -42,11 +43,8 @@ UNIVERSE: Dict[str, str] = {
     "NVDA": "NVIDIA Corporation",
 }
 
-#: Single static tabular quote page per symbol (no crawling beyond this URL).
 SOURCE_URL = "https://finance.yahoo.com/quote/{ticker}/history/"
 
-#: A realistic desktop browser fingerprint. Financial portals reject the
-#: default ``python-requests/x.y`` agent outright with HTTP 401/403.
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -58,10 +56,9 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-REQUEST_TIMEOUT = 8  # seconds — keeps the dashboard responsive
-WINDOW = 10          # trading sessions in the regression window
+REQUEST_TIMEOUT = 8
+WINDOW = 10
 
-#: Column labels we care about, mapped to the canonical DataFrame names.
 _HEADER_ALIASES = {
     "date": "date",
     "open": "open",
@@ -88,7 +85,7 @@ class ScrapeResult:
     ticker: str
     company: str
     rows: List[dict]
-    source: str                 # "live" | "fallback"
+    source: str
     url: str
     note: str = ""
     fetched_at: str = field(
@@ -139,7 +136,6 @@ def _header_map(table) -> Dict[int, str]:
     mapping: Dict[int, str] = {}
     for index, cell in enumerate(header_row.find_all(["th", "td"])):
         label = _cell_text(cell).lower()
-        # Yahoo appends explanatory text, e.g. "Close Close price adjusted…".
         for alias, canonical in _HEADER_ALIASES.items():
             if label == alias or label.startswith(alias + " "):
                 mapping.setdefault(index, canonical)
@@ -181,12 +177,12 @@ def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
     for tr in body.find_all("tr"):
         cells = tr.find_all("td")
         if len(cells) < 4:
-            continue  # header echo, spacer, or a colspan note
+            continue
 
         raw = [_cell_text(c) for c in cells]
         joined = " ".join(raw).lower()
         if "dividend" in joined or "stock split" in joined:
-            continue  # corporate-action rows carry no OHLC data
+            continue
 
         record: dict = {}
         for index, field_name in mapping.items():
@@ -212,12 +208,11 @@ def parse_history_table(html: str, window: int = WINDOW) -> List[dict]:
         )
 
         if len(rows) >= window:
-            break  # the page is newest-first; we only need the latest window
+            break
 
     if not rows:
         raise ScrapeError("price table located but no parsable <tr> rows")
 
-    # Return oldest -> newest so the time index reads left to right.
     rows.sort(key=lambda r: r["date"])
     return rows
 
@@ -231,17 +226,23 @@ def fetch_html(ticker: str, timeout: int = REQUEST_TIMEOUT) -> str:
 
 
 def get_history(ticker: str, window: int = WINDOW, allow_live: bool = True) -> ScrapeResult:
-    """Public entry point: live scrape with a guaranteed offline fallback."""
+    """Use persisted history first, then live HTML, then the offline corpus."""
     symbol = ticker.upper().strip()
     if symbol not in UNIVERSE:
         raise ScrapeError(f"{symbol!r} is outside the configured gaming universe")
 
     url = SOURCE_URL.format(ticker=symbol)
 
+    cached_rows = db.get_history(symbol)
+    if cached_rows:
+        return ScrapeResult(symbol, UNIVERSE[symbol], cached_rows[-window:], "cache", url,
+                            note="loaded from MongoDB cache")
+
     if allow_live:
         try:
             rows = parse_history_table(fetch_html(symbol), window)
             if len(rows) >= 3:
+                db.save_history(symbol, UNIVERSE[symbol], rows, "live")
                 return ScrapeResult(symbol, UNIVERSE[symbol], rows, "live", url)
             note = f"live page yielded only {len(rows)} rows"
         except (requests.RequestException, ScrapeError, ValueError) as exc:
@@ -249,20 +250,14 @@ def get_history(ticker: str, window: int = WINDOW, allow_live: bool = True) -> S
     else:
         note = "live fetch disabled by caller"
 
-    # ---- Offline safety net -------------------------------------------
-    # The identical parser runs against a captured HTML snapshot, so the
-    # demo path and the production path exercise the same DOM traversal.
     rows = parse_history_table(_FALLBACK_PAGES[symbol], window)
+    db.save_history(symbol, UNIVERSE[symbol], rows, "fallback")
     return ScrapeResult(symbol, UNIVERSE[symbol], rows, "fallback", url, note=note)
 
 
 # ==========================================================================
 # OFFLINE FALLBACK CORPUS
 # --------------------------------------------------------------------------
-# Captured HTML snapshots of the historical-data tables (10 sessions each,
-# newest first, exactly as the live portal renders them). These are parsed by
-# ``parse_history_table`` above — the same DOM traversal used for live pages —
-# so a blocked request degrades gracefully instead of crashing the dashboard.
 # ==========================================================================
 
 _FALLBACK_PAGES: Dict[str, str] = {

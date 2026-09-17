@@ -31,10 +31,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-# ---- Risk boundary thresholds (single source of truth) -------------------
-UPSIDE_THRESHOLD = 0.015      # 1.5% projected gain required to open a long
-DOWNSIDE_THRESHOLD = 0.015    # 1.5% projected drawdown triggers the exit
-R2_CONFIDENCE = 0.40          # minimum explanatory power of the High model
+# ---- Risk boundary thresholds --------------------------------------------
+UPSIDE_THRESHOLD = 0.015
+DOWNSIDE_THRESHOLD = 0.015
+R2_CONFIDENCE = 0.40
 
 BUY, SELL, HOLD = "BUY", "SELL", "HOLD"
 
@@ -43,10 +43,10 @@ BUY, SELL, HOLD = "BUY", "SELL", "HOLD"
 class Signal:
     action: str
     headline: str
-    upside_pct: float          # percent, e.g. 1.95
+    upside_pct: float
     downside_pct: float
-    risk_reward: float | None  # upside / downside, None when downside <= 0
-    confidence: float          # 0..100, blended R^2 of both models
+    risk_reward: float | None
+    confidence: float
     reasons: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:

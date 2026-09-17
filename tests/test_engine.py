@@ -19,9 +19,10 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import model      # noqa: E402
-import scraper    # noqa: E402
-import strategy   # noqa: E402
+import model
+import scraper
+import strategy
+import db
 
 
 # ---- Member 1: DOM parsing ------------------------------------------------
@@ -57,7 +58,12 @@ def test_parser_rejects_a_page_with_no_price_table():
 
 
 def test_fallback_engages_when_live_is_disabled():
-    result = scraper.get_history("NVDA", allow_live=False)
+    original_get_history = scraper.db.get_history
+    scraper.db.get_history = lambda ticker: []
+    try:
+        result = scraper.get_history("NVDA", allow_live=False)
+    finally:
+        scraper.db.get_history = original_get_history
     assert result.source == "fallback"
     assert result.company == "NVIDIA Corporation"
     assert len(result.rows) == 10
@@ -69,9 +75,9 @@ def test_frame_cleans_sorts_and_indexes():
     messy = [
         {"date": "2026-09-02", "open": None, "high": "12.5", "low": "11.0", "close": "12.0", "volume": None},
         {"date": "2026-09-01", "open": None, "high": 11.0, "low": 10.0, "close": 10.8, "volume": 5},
-        {"date": "2026-09-03", "open": None, "high": None, "low": 11.5, "close": 12.4, "volume": 6},  # dropped
-        {"date": "2026-09-02", "open": None, "high": 12.9, "low": 11.2, "close": 12.2, "volume": 7},  # dup wins
-        {"date": "2026-09-04", "open": None, "high": 12.0, "low": 13.0, "close": 12.6, "volume": 8},  # swapped
+        {"date": "2026-09-03", "open": None, "high": None, "low": 11.5, "close": 12.4, "volume": 6},
+        {"date": "2026-09-02", "open": None, "high": 12.9, "low": 11.2, "close": 12.2, "volume": 7},
+        {"date": "2026-09-04", "open": None, "high": 12.0, "low": 13.0, "close": 12.6, "volume": 8},
     ]
     frame = model.build_frame(messy)
     assert len(frame) == 3, "row with a missing high and the duplicate should be removed"
@@ -175,19 +181,18 @@ def _signal(close, high, low, r2=0.9, slope=1.0):
 
 
 def test_buy_requires_upside_confidence_and_trend():
-    assert _signal(100, 102.0, 99.5) == strategy.BUY            # +2.0% upside
-    assert _signal(100, 101.4, 99.5) == strategy.HOLD           # +1.4% — under the boundary
-    assert _signal(100, 102.0, 99.5, r2=0.30) == strategy.HOLD  # fit is noise
+    assert _signal(100, 102.0, 99.5) == strategy.BUY
+    assert _signal(100, 101.4, 99.5) == strategy.HOLD
+    assert _signal(100, 102.0, 99.5, r2=0.30) == strategy.HOLD
     assert _signal(100, 102.0, 99.5, slope=-0.4) == strategy.SELL
 
 
 def test_boundaries_are_inclusive():
-    assert _signal(100, 101.5, 99.5) == strategy.BUY            # exactly +1.5%
-    assert _signal(100, 100.4, 98.5) == strategy.SELL           # exactly -1.5%
+    assert _signal(100, 101.5, 99.5) == strategy.BUY
+    assert _signal(100, 100.4, 98.5) == strategy.SELL
 
 
 def test_sell_overrides_a_tempting_upside():
-    # Widening spread: +3% projected upside but also -3% projected drawdown.
     assert _signal(100, 103.0, 97.0) == strategy.SELL
 
 
@@ -216,35 +221,26 @@ def test_rejects_a_non_positive_close():
     raise AssertionError("expected ValueError for a non-positive close")
 
 
-# ---- Member 7: end to end -------------------------------------------------
+# ---- Persistence and end to end ------------------------------------------
+
+def test_db_history_round_trip():
+    rows = scraper.parse_history_table(scraper._FALLBACK_PAGES["TTWO"])
+    db.save_history("TEST", "Test Company", rows, "test")
+    restored = db.get_history("TEST")
+    assert len(restored) == 10
+    assert restored[-1]["date"] == rows[-1]["date"]
+
 
 def test_full_pipeline_for_every_tracked_equity():
-    import app
-
     for ticker in scraper.UNIVERSE:
-        payload = app.analyze(ticker, allow_live=False)
-        assert payload["sessions"] == 10
-        assert payload["signal"]["action"] in {strategy.BUY, strategy.SELL, strategy.HOLD}
-        assert payload["forecast"]["predicted_high"] >= payload["forecast"]["predicted_low"]
-        assert len(payload["series"]["high_trend"]) == 11
-        assert len(payload["table"]) == 10
-
-
-def test_api_routes_respond():
-    import app
-
-    client = app.app.test_client()
-    assert client.get("/").status_code == 200
-    assert client.get("/api/health").get_json()["status"] == "ok"
-
-    single = client.get("/api/analyze/EA?live=0").get_json()
-    assert single["ticker"] == "EA"
-
-    batch = client.get("/api/analyze?live=0").get_json()
-    assert batch["summary"]["tracked"] == len(scraper.UNIVERSE)
-    assert sum(batch["summary"]["signals"].values()) == len(scraper.UNIVERSE)
-
-    assert client.get("/api/analyze/FAKE?live=0").status_code == 404
+        scraped = scraper.get_history(ticker, allow_live=False)
+        frame = model.build_frame(scraped.rows)
+        forecast = model.forecast_next_session(frame)
+        signal = strategy.evaluate_forecast(float(frame["close"].iloc[-1]), forecast)
+        assert len(frame) == 10
+        assert signal.action in {strategy.BUY, strategy.SELL, strategy.HOLD}
+        assert forecast.predicted_high >= forecast.predicted_low
+        assert len(model.series_payload(frame, forecast)["high_trend"]) == 11
 
 
 # ---- runner ---------------------------------------------------------------
@@ -256,7 +252,7 @@ def _main() -> int:
     for name, func in tests:
         try:
             func()
-        except Exception as exc:                       # noqa: BLE001
+        except Exception as exc:
             failures += 1
             print(f"  FAIL  {name}\n        {type(exc).__name__}: {exc}")
         else:

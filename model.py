@@ -39,7 +39,7 @@ from typing import Dict, List, Sequence
 import numpy as np
 import pandas as pd
 
-MIN_SESSIONS = 3  # two points give a perfect fit and a meaningless R^2
+MIN_SESSIONS = 3
 
 
 class ModelError(ValueError):
@@ -79,7 +79,6 @@ def build_frame(rows: Sequence[dict], window: int = 10) -> pd.DataFrame:
     if len(frame) < MIN_SESSIONS:
         raise ModelError(f"need at least {MIN_SESSIONS} clean sessions, got {len(frame)}")
 
-    # A high below its own low means a mangled cell — repair by swapping.
     swapped = frame["high"] < frame["low"]
     if swapped.any():
         frame.loc[swapped, ["high", "low"]] = frame.loc[swapped, ["low", "high"]].values
@@ -102,9 +101,9 @@ class OLSFit:
     intercept: float
     r2: float
     n: int
-    std_error: float      # standard error of the regression (residual sigma)
-    slope_stderr: float   # standard error of the slope estimate
-    t_stat: float         # slope / slope_stderr
+    std_error: float
+    slope_stderr: float
+    t_stat: float
     fitted: List[float]
 
     def predict(self, x) -> float | np.ndarray:
@@ -127,7 +126,6 @@ def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
     if n < MIN_SESSIONS:
         raise ModelError(f"need at least {MIN_SESSIONS} observations, got {n}")
 
-    # Design matrix X = [1, x]  ->  beta = (X'X)^-1 X'y, solved (not inverted).
     design = np.column_stack([np.ones(n), xv])
     gram = design.T @ design
     moment = design.T @ yv
@@ -140,7 +138,6 @@ def fit_ols(x: Sequence[float], y: Sequence[float]) -> OLSFit:
     ss_res = float(residuals @ residuals)
     ss_tot = float(((yv - yv.mean()) ** 2).sum())
 
-    # A perfectly flat series has no variance to explain; call that R^2 = 0.
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
 
     dof = n - 2
@@ -199,9 +196,6 @@ def forecast_next_session(frame: pd.DataFrame) -> Forecast:
     predicted_high = float(high_model.predict(horizon))
     predicted_low = float(low_model.predict(horizon))
 
-    # The two lines are fitted independently and can cross on a converging
-    # series; enforce the structural invariant High >= Low before it reaches
-    # the strategy layer.
     if predicted_low > predicted_high:
         predicted_high, predicted_low = predicted_low, predicted_high
 
