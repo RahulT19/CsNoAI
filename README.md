@@ -144,19 +144,5 @@ The test runner uses standard `assert` statements; pytest is not required.
 6. Click **Save to MongoDB** and explain that history and the prediction are
    persisted when MongoDB is connected.
 7. Optionally enable live scraping and explain the offline fallback safety net.
-
-## Limitations and common questions
-
-**Why ten sessions?** It makes the model easy to explain and demo, but it is a
-small sample with only eight residual degrees of freedom.
-
-**Why separate High and Low models?** Their Day 11 estimates create a possible
-range for calculating upside and downside relative to the latest close.
-
-**Does high R-squared mean the forecast is correct?** No. It measures fit to
-the ten observations only; it does not account for news, earnings, market
-events, mean reversion, or nonlinear volatility.
-
-**What happens if MongoDB or the internet is unavailable?** The application
 falls back safely: stored cache when present, otherwise offline HTML data, and
 in-memory persistence when MongoDB is offline.
